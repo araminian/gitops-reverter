@@ -64,6 +64,13 @@ func main() {
 	}
 
 	for branch, commit := range commits {
-		log.Printf("Branch: %s, Commit: %s", branch, commit)
+		log.Printf("Branch: %s", branch)
+		for _, c := range commit {
+			log.Printf("Commit: %s", c.Message)
+			log.Printf("Commit SHA: %s", c.SHA)
+			log.Printf("Commit Created: %s", c.Created)
+			log.Printf("Commit IsDesiredCommit: %t", c.IsDesiredCommit)
+		}
+		log.Printf("--------------------------------")
 	}
 }

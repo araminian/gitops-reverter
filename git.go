@@ -64,9 +64,16 @@ func listBranches(url string, auth *http.BasicAuth, filter func(string) bool) ([
 	return branches, nil
 }
 
-func findCommitOnBranches(url string, auth *http.BasicAuth, branches []string, tier string, service string, commitHash string, since time.Time) (map[string]string, error) {
+type Commit struct {
+	SHA             string
+	Created         time.Time
+	Message         string
+	IsDesiredCommit bool
+}
 
-	commits := make(map[string]string)
+func findCommitOnBranches(url string, auth *http.BasicAuth, branches []string, tier string, service string, commitHash string, since time.Time) (map[string][]Commit, error) {
+
+	commits := make(map[string][]Commit)
 
 	for _, branch := range branches {
 		repo, err := cloneRepoBranch(url, branch, 0, auth)
@@ -87,7 +94,6 @@ func findCommitOnBranches(url string, auth *http.BasicAuth, branches []string, t
 
 			desiredCommitMessage := fmt.Sprintf("%s : new release - %s", service, tier)
 			matchAll := []string{
-				commitHash,
 				desiredCommitMessage,
 			}
 
@@ -97,7 +103,13 @@ func findCommitOnBranches(url string, auth *http.BasicAuth, branches []string, t
 				}
 			}
 
-			commits[branch] = commit.Hash.String()
+			isDesiredCommit := strings.Contains(commit.Message, commitHash)
+			commits[branch] = append(commits[branch], Commit{
+				SHA:             commit.Hash.String(),
+				Created:         commit.Committer.When,
+				Message:         commit.Message,
+				IsDesiredCommit: isDesiredCommit,
+			})
 
 			return nil
 		})
