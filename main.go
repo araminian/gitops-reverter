@@ -58,7 +58,7 @@ func main() {
 	// 	log.Printf("Branch: %s", branch)
 	// }
 
-	commits, err := findCommitOnBranches("https://github.com/trivago/hotel-search-web", auth, branches, "prod", "api", "c17f5d14da563de7887f79ad8be21e076de45848", time.Now().AddDate(0, 0, -2))
+	commits, err := findCommitOnBranches("https://github.com/trivago/hotel-search-web", auth, branches, "prod", "api", "c17f5d14da563de7887f79ad8be21e076de45848", time.Now().AddDate(0, 0, -2), 8)
 	if err != nil {
 		log.Fatalf("Failed to find commits: %v", err)
 	}

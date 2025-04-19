@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-git/go-git/v5"
@@ -71,55 +72,104 @@ type Commit struct {
 	IsDesiredCommit bool
 }
 
-func findCommitOnBranches(url string, auth *http.BasicAuth, branches []string, tier string, service string, commitHash string, since time.Time) (map[string][]Commit, error) {
+// Worker pool implementation
+func findCommitOnBranches(url string, auth *http.BasicAuth, branches []string, tier string, service string, commitHash string, since time.Time, workers int) (map[string][]Commit, error) {
+	// Set default number of workers if not specified
+	if workers <= 0 {
+		workers = 4 // Default to 4 workers
+	}
 
+	// If we have more workers than branches, limit workers to number of branches
+	if workers > len(branches) {
+		workers = len(branches)
+	}
+
+	var wg sync.WaitGroup
+	commitsMutex := sync.Mutex{}
 	commits := make(map[string][]Commit)
+	errChan := make(chan error, len(branches))
 
+	// Create a channel to distribute work
+	branchChan := make(chan string, len(branches))
+
+	// Add all branches to the channel
 	for _, branch := range branches {
-		repo, err := cloneRepoBranch(url, branch, 0, auth)
-		log.Printf("Cloned repo: %s", branch)
-		if err != nil {
-			return nil, err
-		}
+		branchChan <- branch
+	}
+	close(branchChan)
 
-		logIter, err := repo.Log(&git.LogOptions{
-			Order: git.LogOrderDefault,
-			Since: &since,
-		})
-		if err != nil {
-			return nil, err
-		}
+	// Start worker goroutines
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 
-		err = logIter.ForEach(func(commit *object.Commit) error {
+			for branch := range branchChan {
+				repo, err := cloneRepoBranch(url, branch, 0, auth)
+				log.Printf("Cloned repo: %s", branch)
+				if err != nil {
+					errChan <- fmt.Errorf("error cloning branch %s: %w", branch, err)
+					return
+				}
 
-			desiredCommitMessage := fmt.Sprintf("%s : new release - %s", service, tier)
-			matchAll := []string{
-				desiredCommitMessage,
-			}
+				logIter, err := repo.Log(&git.LogOptions{
+					Order: git.LogOrderDefault,
+					Since: &since,
+				})
+				if err != nil {
+					errChan <- fmt.Errorf("error getting log for branch %s: %w", branch, err)
+					return
+				}
 
-			for _, match := range matchAll {
-				if !strings.Contains(commit.Message, match) {
+				branchCommits := []Commit{}
+				err = logIter.ForEach(func(commit *object.Commit) error {
+					desiredCommitMessage := fmt.Sprintf("%s : new release - %s", service, tier)
+					matchAll := []string{
+						desiredCommitMessage,
+					}
+
+					for _, match := range matchAll {
+						if !strings.Contains(commit.Message, match) {
+							return nil
+						}
+					}
+
+					isDesiredCommit := strings.Contains(commit.Message, commitHash)
+					branchCommits = append(branchCommits, Commit{
+						SHA:             commit.Hash.String(),
+						Created:         commit.Committer.When,
+						Message:         commit.Message,
+						IsDesiredCommit: isDesiredCommit,
+					})
+
 					return nil
+				})
+
+				if err != nil {
+					errChan <- fmt.Errorf("error processing branch %s: %w", branch, err)
+					return
+				}
+
+				// Safely update the commits map
+				if len(branchCommits) > 0 {
+					commitsMutex.Lock()
+					commits[branch] = branchCommits
+					commitsMutex.Unlock()
 				}
 			}
+		}()
+	}
 
-			isDesiredCommit := strings.Contains(commit.Message, commitHash)
-			commits[branch] = append(commits[branch], Commit{
-				SHA:             commit.Hash.String(),
-				Created:         commit.Committer.When,
-				Message:         commit.Message,
-				IsDesiredCommit: isDesiredCommit,
-			})
+	// Wait for all workers to complete
+	wg.Wait()
+	close(errChan)
 
-			return nil
-		})
-
+	// Check for errors
+	for err := range errChan {
 		if err != nil {
 			return nil, err
 		}
-
 	}
 
 	return commits, nil
-
 }
