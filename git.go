@@ -72,8 +72,7 @@ type Commit struct {
 	IsDesiredCommit bool
 }
 
-// Worker pool implementation
-func findCommitOnBranches(url string, auth *http.BasicAuth, branches []string, tier string, service string, commitHash string, since time.Time, workers int) (map[string][]Commit, error) {
+func findCommitOnBranches(url string, auth *http.BasicAuth, branches []string, tier string, service string, commitHash string, afterCommits []string, since time.Time, workers int) (map[string][]Commit, error) {
 	// Set default number of workers if not specified
 	if workers <= 0 {
 		workers = 4 // Default to 4 workers
@@ -135,6 +134,17 @@ func findCommitOnBranches(url string, auth *http.BasicAuth, branches []string, t
 					}
 
 					isDesiredCommit := strings.Contains(commit.Message, commitHash)
+
+					// If the commit is not the desired commit, check if there is a commit after the desired commit
+					if !isDesiredCommit {
+						for i := len(afterCommits) - 1; i >= 0; i-- {
+							if strings.Contains(commit.Message, afterCommits[i]) {
+								isDesiredCommit = true
+								break
+							}
+						}
+					}
+
 					branchCommits = append(branchCommits, Commit{
 						SHA:             commit.Hash.String(),
 						Created:         commit.Committer.When,
@@ -169,6 +179,137 @@ func findCommitOnBranches(url string, auth *http.BasicAuth, branches []string, t
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	return commits, nil
+}
+
+type RevertCommit struct {
+	Branch  string
+	SHA     string
+	Message string
+}
+
+func findRevertSHAs(commits map[string][]Commit) (map[string]RevertCommit, error) {
+
+	revertCommits := make(map[string]RevertCommit)
+
+	for branch, commits := range commits {
+		for _, commit := range commits {
+			if commit.IsDesiredCommit {
+				revertCommits[branch] = RevertCommit{
+					Branch:  branch,
+					SHA:     commit.SHA,
+					Message: commit.Message,
+				}
+			}
+		}
+	}
+
+	return revertCommits, nil
+}
+
+// findCommitHistoryAfterSpecificCommit finds lists of commits that happened after a specific commit, it's git based
+func findCommitHistoryAfterSpecificCommit(url, branch, commitHash string, auth *http.BasicAuth, since time.Time) ([]string, error) {
+
+	storage := memory.NewStorage()
+
+	// Initialize a new remote
+	remote := git.NewRemote(storage, &config.RemoteConfig{
+		Name: "origin",
+		URLs: []string{url},
+	})
+
+	// List references to get the branch head
+	refs, err := remote.List(&git.ListOptions{Auth: auth})
+	if err != nil {
+		log.Printf("Error listing remote references: %v", err)
+		return nil, err
+	}
+
+	// Find the reference for our branch
+	var headRef *plumbing.Reference
+	branchRefName := plumbing.NewBranchReferenceName(branch)
+	for _, ref := range refs {
+		if ref.Name() == branchRefName {
+			headRef = ref
+			break
+		}
+	}
+
+	if headRef == nil {
+		return nil, fmt.Errorf("branch %s not found", branch)
+	}
+
+	// Only fetch the relevant data using the reference
+	fetchOpts := &git.FetchOptions{
+		RemoteName: "origin",
+		RefSpecs:   []config.RefSpec{config.RefSpec(headRef.Name() + ":" + headRef.Name())},
+		Auth:       auth,
+		Depth:      100,
+	}
+
+	repo, err := git.Init(storage, nil)
+	if err != nil {
+		log.Printf("Error initializing repo: %v", err)
+		return nil, err
+	}
+
+	_, err = repo.CreateRemote(&config.RemoteConfig{
+		Name: "origin",
+		URLs: []string{url},
+	})
+
+	if err != nil {
+		log.Printf("Error creating remote: %v", err)
+		return nil, err
+	}
+
+	// Fetch the commits
+	err = repo.Fetch(fetchOpts)
+	if err != nil && err != git.NoErrAlreadyUpToDate {
+		log.Printf("Error fetching: %v", err)
+		return nil, err
+	}
+
+	// Get the reference to the fetched branch
+	ref, err := repo.Reference(headRef.Name(), true)
+	if err != nil {
+		log.Printf("Error getting reference: %v", err)
+		return nil, err
+	}
+
+	headCommit, err := repo.CommitObject(ref.Hash())
+	if err != nil {
+		log.Printf("Error getting head commit: %v", err)
+		return nil, err
+	}
+
+	iter := object.NewCommitPreorderIter(headCommit, nil, nil)
+
+	commits := []string{}
+	found := false
+
+	err = iter.ForEach(func(commit *object.Commit) error {
+		if commit.Committer.When.Before(since) {
+			return fmt.Errorf("reached commits older than the specified time")
+		}
+
+		if commit.Hash.String() == commitHash {
+			found = true
+			commits = append(commits, commit.Hash.String())
+			return nil
+		}
+
+		if !found {
+			commits = append(commits, commit.Hash.String())
+		}
+
+		return nil
+	})
+
+	if err != nil && err.Error() != "reached commits older than the specified time" && !found {
+		log.Printf("Warning: target commit %s not found within fetched depth", commitHash)
 	}
 
 	return commits, nil

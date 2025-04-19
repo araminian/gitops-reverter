@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"strings"
@@ -11,39 +12,39 @@ import (
 
 func main() {
 	auth := &http.BasicAuth{Username: "git", Password: os.Getenv("GITHUB_TOKEN")}
-	// repo, err := cloneRepoBranch("https://github.com/trivago/hotel-search-web", "gitops/advertisers", 0, auth)
+	commitHash := "c17f5d14da563de7887f79ad8be21e076de45848"
+	since := time.Now().AddDate(0, 0, -2)
+	workers := 8
+
+	// // Use Git to find the commit history after the specific commit
+	// commitsAfterCommit, err := findCommitHistoryAfterSpecificCommit("https://github.com/trivago/hotel-search-web", "master", commitHash, auth, since)
 	// if err != nil {
-	// 	log.Fatalf("Failed to clone repo: %v", err)
+	// 	log.Fatalf("Failed to find commit history after specific commit: %v", err)
 	// }
 
-	// matchAll := []string{
-	// 	"c17f5d14da563de7887f79ad8be21e076de45848",
-	// 	"api : new release - prod",
+	// for _, c := range commitsAfterCommit {
+	// 	log.Printf("Commit: %s", c)
 	// }
 
-	// since := time.Now().AddDate(0, 0, -7)
+	// Use Github to find the commit history after the specific commit
 
-	// // Get commits using Log with proper error handling
-	// logIter, err := repo.Log(&git.LogOptions{
-	// 	Order: git.LogOrderDefault,
-	// 	Since: &since,
-	// })
-	// if err != nil {
-	// 	log.Fatalf("Failed to get log: %v", err)
-	// }
+	githubClient, err := NewGithubClient("trivago", "hotel-search-web")
+	if err != nil {
+		log.Fatalf("Failed to create Github client: %v", err)
+	}
 
-	// logIter.ForEach(func(commit *object.Commit) error {
-	// 	for _, match := range matchAll {
-	// 		if !strings.Contains(commit.Message, match) {
-	// 			return nil
-	// 		}
-	// 	}
+	commitsGithub, err := githubClient.ListCommitsAfterCommit(context.Background(), "master", commitHash, since)
+	if err != nil {
+		log.Fatalf("Failed to list commits: %v", err)
+	}
 
-	// 	log.Printf("Commit: %s", commit.Message)
-	// 	log.Printf("Commit SHA: %s", commit.Hash.String())
+	commitsAfterDesiredCommit := make([]string, 0)
 
-	// 	return nil
-	// })
+	for _, c := range commitsGithub {
+		commitsAfterDesiredCommit = append(commitsAfterDesiredCommit, c.GetSHA())
+	}
+
+	log.Printf("Found %v commits to check", commitsAfterDesiredCommit)
 
 	filter := func(branch string) bool {
 		return strings.HasPrefix(branch, "gitops/")
@@ -58,19 +59,32 @@ func main() {
 	// 	log.Printf("Branch: %s", branch)
 	// }
 
-	commits, err := findCommitOnBranches("https://github.com/trivago/hotel-search-web", auth, branches, "prod", "api", "c17f5d14da563de7887f79ad8be21e076de45848", time.Now().AddDate(0, 0, -2), 8)
+	commits, err := findCommitOnBranches("https://github.com/trivago/hotel-search-web", auth, branches, "prod", "api", commitHash, commitsAfterDesiredCommit, since, workers)
 	if err != nil {
 		log.Fatalf("Failed to find commits: %v", err)
 	}
 
-	for branch, commit := range commits {
+	// for branch, commit := range commits {
+	// 	log.Printf("Branch: %s", branch)
+	// 	for _, c := range commit {
+	// 		log.Printf("Commit: %s", c.Message)
+	// 		log.Printf("Commit SHA: %s", c.SHA)
+	// 		log.Printf("Commit Created: %s", c.Created)
+	// 		log.Printf("Commit IsDesiredCommit: %t", c.IsDesiredCommit)
+	// 	}
+	// 	log.Printf("--------------------------------")
+	// }
+
+	revertCommits, err := findRevertSHAs(commits)
+	if err != nil {
+		log.Fatalf("Failed to find revert commits: %v", err)
+	}
+
+	for branch, revertCommit := range revertCommits {
 		log.Printf("Branch: %s", branch)
-		for _, c := range commit {
-			log.Printf("Commit: %s", c.Message)
-			log.Printf("Commit SHA: %s", c.SHA)
-			log.Printf("Commit Created: %s", c.Created)
-			log.Printf("Commit IsDesiredCommit: %t", c.IsDesiredCommit)
-		}
+		log.Printf("Revert SHA: %s", revertCommit.SHA)
+		log.Printf("Message: %s", revertCommit.Message)
 		log.Printf("--------------------------------")
 	}
+
 }
