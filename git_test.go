@@ -10,7 +10,6 @@ import (
 
 func TestRevertCommit(t *testing.T) {
 
-	return
 	owner := "araminian"
 	repo := "gitops-k8s"
 	branch := "gitops"
@@ -19,7 +18,7 @@ func TestRevertCommit(t *testing.T) {
 
 	url := fmt.Sprintf("https://github.com/%s/%s", owner, repo)
 
-	commitToRevert := "a8c883f9eacf70d9412a76f20095ec3c6c027de5"
+	commitToRevert := "71e3272f60dfc24e86034471ae1072944e0a379d"
 
 	author := "araminian"
 	email := "rmin.aminian@gmail.com"
