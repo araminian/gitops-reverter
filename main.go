@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -14,7 +15,11 @@ func main() {
 	auth := &http.BasicAuth{Username: "git", Password: os.Getenv("GITHUB_TOKEN")}
 	commitHash := "c17f5d14da563de7887f79ad8be21e076de45848"
 	since := time.Now().AddDate(0, 0, -2)
-	workers := 8
+	workers := 10
+	owner := "trivago"
+	repo := "hotel-search-web"
+	url := fmt.Sprintf("https://github.com/%s/%s", owner, repo)
+	branch := "master"
 
 	// // Use Git to find the commit history after the specific commit
 	// commitsAfterCommit, err := findCommitHistoryAfterSpecificCommit("https://github.com/trivago/hotel-search-web", "master", commitHash, auth, since)
@@ -28,12 +33,12 @@ func main() {
 
 	// Use Github to find the commit history after the specific commit
 
-	githubClient, err := NewGithubClient("trivago", "hotel-search-web")
+	githubClient, err := NewGithubClient(owner, repo)
 	if err != nil {
 		log.Fatalf("Failed to create Github client: %v", err)
 	}
 
-	commitsGithub, err := githubClient.ListCommitsAfterCommit(context.Background(), "master", commitHash, since)
+	commitsGithub, err := githubClient.ListCommitsAfterCommit(context.Background(), branch, commitHash, since)
 	if err != nil {
 		log.Fatalf("Failed to list commits: %v", err)
 	}
@@ -50,7 +55,7 @@ func main() {
 		return strings.HasPrefix(branch, "gitops/")
 	}
 
-	branches, err := listBranches("https://github.com/trivago/hotel-search-web", auth, filter)
+	branches, err := listBranches(url, auth, filter)
 	if err != nil {
 		log.Fatalf("Failed to list branches: %v", err)
 	}
@@ -59,7 +64,7 @@ func main() {
 	// 	log.Printf("Branch: %s", branch)
 	// }
 
-	commits, err := findCommitOnBranches("https://github.com/trivago/hotel-search-web", auth, branches, "prod", "api", commitHash, commitsAfterDesiredCommit, since, workers)
+	commits, err := findCommitOnBranches(url, auth, branches, "prod", "api", commitHash, commitsAfterDesiredCommit, since, workers)
 	if err != nil {
 		log.Fatalf("Failed to find commits: %v", err)
 	}

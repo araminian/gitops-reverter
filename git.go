@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-git/go-billy/v5/memfs"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -184,20 +185,20 @@ func findCommitOnBranches(url string, auth *http.BasicAuth, branches []string, t
 	return commits, nil
 }
 
-type RevertCommit struct {
+type RevertCommitInfo struct {
 	Branch  string
 	SHA     string
 	Message string
 }
 
-func findRevertSHAs(commits map[string][]Commit) (map[string]RevertCommit, error) {
+func findRevertSHAs(commits map[string][]Commit) (map[string]RevertCommitInfo, error) {
 
-	revertCommits := make(map[string]RevertCommit)
+	revertCommits := make(map[string]RevertCommitInfo)
 
 	for branch, commits := range commits {
 		for _, commit := range commits {
 			if commit.IsDesiredCommit {
-				revertCommits[branch] = RevertCommit{
+				revertCommits[branch] = RevertCommitInfo{
 					Branch:  branch,
 					SHA:     commit.SHA,
 					Message: commit.Message,
@@ -313,4 +314,187 @@ func findCommitHistoryAfterSpecificCommit(url, branch, commitHash string, auth *
 	}
 
 	return commits, nil
+}
+
+func RevertCommit(url string, auth *http.BasicAuth, branch string, commitSHA string, force bool, author string, email string) error {
+	// Use in-memory storage and filesystem
+	storage := memory.NewStorage()
+	fs := memfs.New()
+
+	// Clone the repository with the specified branch
+	refName := plumbing.NewBranchReferenceName(branch)
+	repo, err := git.Clone(
+		storage,
+		fs,
+		&git.CloneOptions{
+			URL:           url,
+			ReferenceName: refName,
+			SingleBranch:  true,
+			Auth:          auth,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("failed to clone repository: %w", err)
+	}
+
+	// Get the worktree
+	wt, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to get worktree: %w", err)
+	}
+
+	// Get the commit to revert
+	commitToRevert, err := repo.CommitObject(plumbing.NewHash(commitSHA))
+	if err != nil {
+		return fmt.Errorf("failed to get commit object %s: %w", commitSHA, err)
+	}
+
+	// Get the commit message to use in the revert
+	revertMessage := fmt.Sprintf("Revert \"%s\"\n\nThis reverts commit %s",
+		strings.Split(commitToRevert.Message, "\n")[0], commitSHA)
+
+	// Since we can't run an external git command on an in-memory filesystem,
+	// we need to manually perform the revert
+
+	// Get the parent commit of the commit to revert
+	if commitToRevert.NumParents() == 0 {
+		return fmt.Errorf("cannot revert a commit with no parents")
+	}
+
+	parentCommit, err := commitToRevert.Parent(0)
+	if err != nil {
+		return fmt.Errorf("failed to get parent commit: %w", err)
+	}
+
+	// Get the trees for comparison
+	commitTree, err := commitToRevert.Tree()
+	if err != nil {
+		return fmt.Errorf("failed to get commit tree: %w", err)
+	}
+
+	parentTree, err := parentCommit.Tree()
+	if err != nil {
+		return fmt.Errorf("failed to get parent tree: %w", err)
+	}
+
+	// Get changes between the commit to revert and its parent
+	changes, err := commitTree.Diff(parentTree)
+	if err != nil {
+		return fmt.Errorf("failed to get changes: %w", err)
+	}
+
+	// Apply the inverse of the changes (this is what a revert does)
+	for _, change := range changes {
+		// We check the From and To fields to determine the type of change
+		fromEmpty := change.From.Name == ""
+		toEmpty := change.To.Name == ""
+
+		if fromEmpty && !toEmpty {
+			// This was a file addition in the original commit, we need to remove it
+			_, err = wt.Remove(change.To.Name)
+			if err != nil {
+				return fmt.Errorf("failed to remove file %s: %w", change.To.Name, err)
+			}
+		} else if !fromEmpty && toEmpty {
+			// This was a file deletion in the original commit, we need to restore it
+			fromFile, err := parentTree.File(change.From.Name)
+			if err != nil {
+				return fmt.Errorf("failed to get file %s from parent tree: %w", change.From.Name, err)
+			}
+
+			content, err := fromFile.Contents()
+			if err != nil {
+				return fmt.Errorf("failed to get contents of file %s: %w", change.From.Name, err)
+			}
+
+			// Create directories if they don't exist
+			dir := change.From.Name
+			lastSlash := strings.LastIndex(dir, "/")
+			if lastSlash > 0 {
+				dir = dir[:lastSlash]
+				err = wt.Filesystem.MkdirAll(dir, 0755)
+				if err != nil {
+					return fmt.Errorf("failed to create directories for %s: %w", change.From.Name, err)
+				}
+			}
+
+			// Create the file in the worktree
+			f, err := wt.Filesystem.Create(change.From.Name)
+			if err != nil {
+				return fmt.Errorf("failed to create file %s: %w", change.From.Name, err)
+			}
+
+			_, err = f.Write([]byte(content))
+			if err != nil {
+				f.Close()
+				return fmt.Errorf("failed to write to file %s: %w", change.From.Name, err)
+			}
+
+			err = f.Close()
+			if err != nil {
+				return fmt.Errorf("failed to close file %s: %w", change.From.Name, err)
+			}
+
+			_, err = wt.Add(change.From.Name)
+			if err != nil {
+				return fmt.Errorf("failed to add file %s to index: %w", change.From.Name, err)
+			}
+		} else {
+			// This was a file modification in the original commit, we need to restore the parent version
+			fromFile, err := parentTree.File(change.From.Name)
+			if err != nil {
+				return fmt.Errorf("failed to get file %s from parent tree: %w", change.From.Name, err)
+			}
+
+			content, err := fromFile.Contents()
+			if err != nil {
+				return fmt.Errorf("failed to get contents of file %s: %w", change.From.Name, err)
+			}
+
+			// Update the file in the worktree
+			f, err := wt.Filesystem.Create(change.From.Name)
+			if err != nil {
+				return fmt.Errorf("failed to create file %s: %w", change.From.Name, err)
+			}
+
+			_, err = f.Write([]byte(content))
+			if err != nil {
+				f.Close()
+				return fmt.Errorf("failed to write to file %s: %w", change.From.Name, err)
+			}
+
+			err = f.Close()
+			if err != nil {
+				return fmt.Errorf("failed to close file %s: %w", change.From.Name, err)
+			}
+
+			_, err = wt.Add(change.From.Name)
+			if err != nil {
+				return fmt.Errorf("failed to add file %s to index: %w", change.From.Name, err)
+			}
+		}
+	}
+
+	// Commit the revert
+	_, err = wt.Commit(revertMessage, &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  author,
+			Email: email,
+			When:  time.Now(),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to commit revert: %w", err)
+	}
+
+	// Push the changes
+	err = repo.Push(&git.PushOptions{
+		Auth:  auth,
+		Force: force,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to push revert: %w", err)
+	}
+
+	return nil
 }
