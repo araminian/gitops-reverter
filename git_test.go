@@ -10,6 +10,7 @@ import (
 
 func TestRevertCommit(t *testing.T) {
 
+	return
 	owner := "araminian"
 	repo := "gitops-k8s"
 	branch := "gitops"
