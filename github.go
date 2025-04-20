@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"time"
 
@@ -71,4 +72,93 @@ func (c *GithubClient) ListCommitsSince(ctx context.Context, since time.Time) ([
 	}
 
 	return commits, nil
+}
+
+// listAllWorkflowsRuns lists all workflow runs for a given repository
+func (c *GithubClient) ListAllWorkflowsRuns(ctx context.Context, branch string) ([]*github.WorkflowRun, error) {
+
+	statuses := []string{
+		"in_progress",
+		"queued",
+		"waiting",
+		"pending",
+	}
+
+	workflowsRunList := make([]*github.WorkflowRun, 0)
+
+	for _, status := range statuses {
+
+		for {
+			opts := &github.ListWorkflowRunsOptions{
+				Status: status,
+				Branch: branch,
+				ListOptions: github.ListOptions{
+					PerPage: 100,
+				},
+			}
+
+			workflowRuns, resp, err := c.client.Actions.ListRepositoryWorkflowRuns(
+				ctx,
+				c.owner,
+				c.repo,
+				opts,
+			)
+
+			if err != nil {
+				log.Printf("Error listing workflow runs for status %s: %v", status, err)
+				continue
+			}
+
+			workflowsRunList = append(workflowsRunList, workflowRuns.WorkflowRuns...)
+
+			if resp.NextPage == 0 {
+				break
+			}
+
+			opts.Page = resp.NextPage
+
+		}
+
+	}
+
+	return workflowsRunList, nil
+
+}
+
+// ForceCancelWorkflowRun force cancels a workflow run
+func (c *GithubClient) ForceCancelWorkflowRun(ctx context.Context, workflowRunID int64) error {
+
+	// use /force-cancel endpoint to cancel a workflow run
+	url := fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d/force-cancel", c.owner, c.repo, workflowRunID)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := c.client.Do(ctx, req, nil)
+	if err != nil {
+		return err
+	}
+
+	if resp.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("failed to force cancel workflow run: %s", resp.Status)
+	}
+
+	return nil
+}
+
+// DisableWorkflow disables a workflow
+func (c *GithubClient) DisableWorkflow(ctx context.Context, workflowID int64) error {
+
+	resp, err := c.client.Actions.DisableWorkflowByID(ctx, c.owner, c.repo, workflowID)
+	if err != nil {
+		return err
+	}
+
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("failed to disable workflow: %s", resp.Status)
+	}
+
+	return nil
 }
