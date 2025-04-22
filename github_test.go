@@ -56,3 +56,30 @@ func TestListAllWorkflowsRuns(t *testing.T) {
 		fmt.Println(workflowRun.GetWorkflowID())
 	}
 }
+
+func TestMasterHistory(t *testing.T) {
+	owner := "trivago"
+	repo := "hotel-search-web"
+
+	client, err := NewGithubClient(owner, repo)
+	if err != nil {
+		t.Fatalf("Failed to create github client: %v", err)
+	}
+
+	since := time.Now().AddDate(0, -1, 0)
+
+	commits, err := client.ListCommitsSince(context.Background(), since)
+	if err != nil {
+		t.Fatalf("Failed to list commits: %v", err)
+	}
+
+	for _, commit := range commits {
+		fmt.Printf("SHA: %s\n", commit.GetSHA())
+		for _, parent := range commit.Parents {
+			fmt.Printf("Parent: %s\n", parent.GetSHA())
+		}
+		fmt.Printf("Date: %v\n", commit.GetCommit().GetAuthor().Date.Local())
+		fmt.Printf("--------------------------------\n")
+	}
+
+}

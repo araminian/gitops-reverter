@@ -60,18 +60,32 @@ func (c *GithubClient) ListCommitsAfterCommit(ctx context.Context, branch, commi
 	return desiredCommits, nil
 }
 
-// listCommitsSince list all commits since a specific time
+// ListCommitsSince list all commits since a specific time
 func (c *GithubClient) ListCommitsSince(ctx context.Context, since time.Time) ([]*github.RepositoryCommit, error) {
 	opts := &github.CommitsListOptions{
-		Since: since,
+		Since:       since,
+		ListOptions: github.ListOptions{PerPage: 100},
 	}
 
-	commits, _, err := c.client.Repositories.ListCommits(ctx, c.owner, c.repo, opts)
-	if err != nil {
-		return nil, err
+	allCommits := make([]*github.RepositoryCommit, 0)
+
+	for {
+		pageCommits, resp, err := c.client.Repositories.ListCommits(ctx, c.owner, c.repo, opts)
+		if err != nil {
+			return nil, err
+		}
+
+		// This was the bug - we were appending commits to itself instead of to allCommits
+		allCommits = append(allCommits, pageCommits...)
+
+		if resp.NextPage == 0 {
+			break
+		}
+
+		opts.Page = resp.NextPage
 	}
 
-	return commits, nil
+	return allCommits, nil
 }
 
 // listAllWorkflowsRuns lists all workflow runs for a given repository
