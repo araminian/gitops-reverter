@@ -61,10 +61,41 @@ func (c *GithubClient) ListCommitsAfterCommit(ctx context.Context, branch, commi
 }
 
 // ListCommitsSince list all commits since a specific time
-func (c *GithubClient) ListCommitsSince(ctx context.Context, since time.Time) ([]*github.RepositoryCommit, error) {
+func (c *GithubClient) ListCommitsSince(ctx context.Context, since time.Time, branch string) ([]*github.RepositoryCommit, error) {
 	opts := &github.CommitsListOptions{
 		Since:       since,
 		ListOptions: github.ListOptions{PerPage: 100},
+		SHA:         branch,
+	}
+
+	allCommits := make([]*github.RepositoryCommit, 0)
+
+	for {
+		pageCommits, resp, err := c.client.Repositories.ListCommits(ctx, c.owner, c.repo, opts)
+		if err != nil {
+			return nil, err
+		}
+
+		// This was the bug - we were appending commits to itself instead of to allCommits
+		allCommits = append(allCommits, pageCommits...)
+
+		if resp.NextPage == 0 {
+			break
+		}
+
+		opts.Page = resp.NextPage
+	}
+
+	return allCommits, nil
+}
+
+// ListCommitsSinceOnPath lists all commits since a specific time on a specific path
+func (c *GithubClient) ListCommitsSinceOnPath(ctx context.Context, since time.Time, branch, path string) ([]*github.RepositoryCommit, error) {
+	opts := &github.CommitsListOptions{
+		Since:       since,
+		ListOptions: github.ListOptions{PerPage: 100},
+		SHA:         branch,
+		Path:        path,
 	}
 
 	allCommits := make([]*github.RepositoryCommit, 0)
@@ -175,4 +206,38 @@ func (c *GithubClient) DisableWorkflow(ctx context.Context, workflowID int64) er
 	}
 
 	return nil
+}
+
+// ListBranches lists all branches
+func (c *GithubClient) ListBranches(ctx context.Context, filter func(string) bool, protected bool) ([]*github.Branch, error) {
+
+	opts := &github.BranchListOptions{
+		Protected: &protected,
+		ListOptions: github.ListOptions{
+			PerPage: 100,
+		},
+	}
+
+	gitopsBranches := make([]*github.Branch, 0)
+
+	for {
+		branches, resp, err := c.client.Repositories.ListBranches(ctx, c.owner, c.repo, opts)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, branch := range branches {
+			if filter(branch.GetName()) {
+				gitopsBranches = append(gitopsBranches, branch)
+			}
+		}
+
+		if resp.NextPage == 0 {
+			break
+		}
+
+		opts.Page = resp.NextPage
+	}
+
+	return gitopsBranches, nil
 }
