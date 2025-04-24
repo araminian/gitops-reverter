@@ -51,11 +51,16 @@ func listGitOpsBranches(owner, repo string, ignore []string) ([]string, error) {
 	return branches, nil
 }
 
-func generateCommitGraph(owner, repo string, gitopsBranches []string, headCommits map[string]*HeadCommit, path string) (commitGraph map[string]*HeadCommit, err error) {
+func generateCommitGraph(owner, repo string, gitopsBranches []string, headCommits map[string]*HeadCommit, path string) (commitsGraph map[string]*HeadCommit, err error) {
 
 	client, err := NewGithubClient(owner, repo)
 	if err != nil {
 		return nil, err
+	}
+
+	commitsGraph = make(map[string]*HeadCommit, len(headCommits))
+	for sha, commit := range headCommits {
+		commitsGraph[sha] = commit
 	}
 
 	since := time.Now().AddDate(0, -1, 0)
@@ -83,7 +88,12 @@ func generateCommitGraph(owner, repo string, gitopsBranches []string, headCommit
 			fmt.Printf("Branch: %s\n", branch)
 			fmt.Printf("Extracted SHA: %s\n", extractedSHA)
 
-			headCommits[extractedSHA].GitOpsCommits[branch] = GitOpsCommit{
+			// Check if the commit is in the head commits map
+			if _, ok := commitsGraph[extractedSHA]; !ok {
+				continue
+			}
+
+			commitsGraph[extractedSHA].GitOpsCommits[branch] = GitOpsCommit{
 				SHA:  commit.GetSHA(),
 				Date: commit.GetCommit().GetAuthor().GetDate().Local(),
 			}
@@ -92,5 +102,5 @@ func generateCommitGraph(owner, repo string, gitopsBranches []string, headCommit
 
 	}
 
-	return headCommits, nil
+	return commitsGraph, nil
 }
