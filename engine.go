@@ -104,3 +104,48 @@ func generateCommitGraph(owner, repo string, gitopsBranches []string, headCommit
 
 	return commitsGraph, nil
 }
+
+// findRollbackCommits finds rollback commits for a given head commit on gitops branches
+func findRollbackCommits(commitsGraph map[string]*HeadCommit, gitopsBranches []string, candidateCommit string) (map[string]RollbackCommit, error) {
+
+	rollbackCommits := make(map[string]RollbackCommit, len(gitopsBranches))
+
+	branchesToCheck := make(map[string]bool, len(gitopsBranches))
+	for _, b := range gitopsBranches {
+		branchesToCheck[b] = true
+	}
+
+	if _, ok := commitsGraph[candidateCommit]; !ok {
+		return nil, fmt.Errorf("candidate commit not found in commits graph")
+	}
+
+	commitToCheck := candidateCommit
+	for {
+
+		if len(branchesToCheck) == 0 {
+			break
+		}
+
+		fmt.Printf("Checking commit: %s\n", commitToCheck)
+		fmt.Printf("Branches to check: %v\n", branchesToCheck)
+
+		gitopsCommits := commitsGraph[commitToCheck].GitOpsCommits
+		for b, c := range gitopsCommits {
+			if !branchesToCheck[b] {
+				continue
+			}
+
+			// Remove the branch from the branches to check
+			delete(branchesToCheck, b)
+
+			rollbackCommits[b] = RollbackCommit{
+				GitOpsCommit: c.SHA,
+				HeadCommit:   commitToCheck,
+			}
+		}
+
+		commitToCheck = commitsGraph[commitToCheck].Parent
+	}
+
+	return rollbackCommits, nil
+}

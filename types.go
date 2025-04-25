@@ -13,3 +13,8 @@ type GitOpsCommit struct {
 	SHA  string
 	Date time.Time
 }
+
+type RollbackCommit struct {
+	GitOpsCommit string
+	HeadCommit   string
+}

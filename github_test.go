@@ -107,7 +107,7 @@ func TestGenerateCommitGraph(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create github client: %v", err)
 	}
-	ignore := []string{"gitops/sink", "gitops/infra", "gitops/stage"}
+	ignore := []string{"gitops/sink", "gitops/infra", "gitops/stage", "gitops/seo-indexation"}
 
 	// List all gitops branches
 	branches, err := listGitOpsBranches(owner, repo, ignore)
@@ -130,11 +130,27 @@ func TestGenerateCommitGraph(t *testing.T) {
 		t.Fatalf("Failed to generate commit graph: %v", err)
 	}
 
-	for _, commit := range commitGraph {
-		fmt.Printf("Commit: %s\n", commit.SHA)
-		fmt.Printf("Parent: %s\n", commit.Parent)
-		fmt.Printf("Date: %v\n", commit.Date)
-		fmt.Printf("GitOps Commits: %v\n", commit.GitOpsCommits)
+	// for _, commit := range commitGraph {
+	// 	fmt.Printf("Commit: %s\n", commit.SHA)
+	// 	fmt.Printf("Parent: %s\n", commit.Parent)
+	// 	fmt.Printf("Date: %v\n", commit.Date)
+	// 	fmt.Printf("GitOps Commits: %v\n", commit.GitOpsCommits)
+	// 	fmt.Printf("--------------------------------\n")
+	// }
+
+	t.Logf("Finding rollback commits")
+	candidateCommit := "aee08b8b8a6c8212a043486c78af8fe7528464af"
+
+	rollbackCommits, err := findRollbackCommits(commitGraph, branches, candidateCommit)
+
+	if err != nil {
+		t.Fatalf("Failed to find rollback commits: %v", err)
+	}
+
+	for branch, commit := range rollbackCommits {
+		fmt.Printf("Branch: %s\n", branch)
+		fmt.Printf("Rollback Commit: %s\n", commit.GitOpsCommit)
+		fmt.Printf("Head Commit: %s\n", commit.HeadCommit)
 		fmt.Printf("--------------------------------\n")
 	}
 }
