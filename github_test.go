@@ -125,10 +125,12 @@ func TestGenerateCommitGraph(t *testing.T) {
 	masterCommits := processHeadCommits(commits)
 
 	path := "manifests/api/prod"
-	commitGraph, err := generateCommitGraph(owner, repo, branches, masterCommits, path)
+	commitGraph, commitsHistory, err := generateCommitGraph(owner, repo, branches, masterCommits, path)
 	if err != nil {
 		t.Fatalf("Failed to generate commit graph: %v", err)
 	}
+
+	_ = commitsHistory
 
 	// for _, commit := range commitGraph {
 	// 	fmt.Printf("Commit: %s\n", commit.SHA)
@@ -153,4 +155,20 @@ func TestGenerateCommitGraph(t *testing.T) {
 		fmt.Printf("Head Commit: %s\n", commit.HeadCommit)
 		fmt.Printf("--------------------------------\n")
 	}
+
+	t.Logf("Finding commits after rollback")
+	commitsAfterRollback, err := findCommitsAfterRollback(rollbackCommits, commitsHistory)
+	if err != nil {
+		t.Fatalf("Failed to find commits after rollback: %v", err)
+	}
+
+	//  Newest to oldest
+	for branch, commits := range commitsAfterRollback {
+		fmt.Printf("Branch: %s\n", branch)
+		for i, commit := range commits {
+			fmt.Printf("Commit %d: %s\n", i, commit)
+		}
+		fmt.Printf("--------------------------------\n")
+	}
+
 }

@@ -51,11 +51,11 @@ func listGitOpsBranches(owner, repo string, ignore []string) ([]string, error) {
 	return branches, nil
 }
 
-func generateCommitGraph(owner, repo string, gitopsBranches []string, headCommits map[string]*HeadCommit, path string) (commitsGraph map[string]*HeadCommit, err error) {
+func generateCommitGraph(owner, repo string, gitopsBranches []string, headCommits map[string]*HeadCommit, path string) (commitsGraph map[string]*HeadCommit, commitsHistory map[string][]string, err error) {
 
 	client, err := NewGithubClient(owner, repo)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	commitsGraph = make(map[string]*HeadCommit, len(headCommits))
@@ -65,6 +65,8 @@ func generateCommitGraph(owner, repo string, gitopsBranches []string, headCommit
 
 	since := time.Now().AddDate(0, -1, 0)
 
+	commitsHistory = make(map[string][]string)
+
 	for _, branch := range gitopsBranches {
 		branchCommits, err := client.ListCommitsSinceOnPath(context.Background(), since, branch, path)
 		if err != nil {
@@ -72,6 +74,9 @@ func generateCommitGraph(owner, repo string, gitopsBranches []string, headCommit
 		}
 
 		for _, commit := range branchCommits {
+
+			// Add the commit to the history
+			commitsHistory[branch] = append(commitsHistory[branch], commit.GetSHA())
 
 			message := commit.GetCommit().GetMessage()
 			repoSHAPattern := regexp.MustCompile(`[\w-]+/[\w-]+@([0-9a-f]{40})`)
@@ -85,8 +90,8 @@ func generateCommitGraph(owner, repo string, gitopsBranches []string, headCommit
 				continue
 			}
 
-			fmt.Printf("Branch: %s\n", branch)
-			fmt.Printf("Extracted SHA: %s\n", extractedSHA)
+			// fmt.Printf("Branch: %s\n", branch)
+			// fmt.Printf("Extracted SHA: %s\n", extractedSHA)
 
 			// Check if the commit is in the head commits map
 			if _, ok := commitsGraph[extractedSHA]; !ok {
@@ -102,7 +107,7 @@ func generateCommitGraph(owner, repo string, gitopsBranches []string, headCommit
 
 	}
 
-	return commitsGraph, nil
+	return commitsGraph, commitsHistory, nil
 }
 
 // findRollbackCommits finds rollback commits for a given head commit on gitops branches
@@ -126,8 +131,8 @@ func findRollbackCommits(commitsGraph map[string]*HeadCommit, gitopsBranches []s
 			break
 		}
 
-		fmt.Printf("Checking commit: %s\n", commitToCheck)
-		fmt.Printf("Branches to check: %v\n", branchesToCheck)
+		// fmt.Printf("Checking commit: %s\n", commitToCheck)
+		// fmt.Printf("Branches to check: %v\n", branchesToCheck)
 
 		gitopsCommits := commitsGraph[commitToCheck].GitOpsCommits
 		for b, c := range gitopsCommits {
@@ -148,4 +153,27 @@ func findRollbackCommits(commitsGraph map[string]*HeadCommit, gitopsBranches []s
 	}
 
 	return rollbackCommits, nil
+}
+
+// findCommitsAfterRollback finds the commits after the rollback commit on the gitops branches
+func findCommitsAfterRollback(rollbackCommits map[string]RollbackCommit, commitsHistory map[string][]string) (map[string][]string, error) {
+
+	commitsAfterRollback := make(map[string][]string)
+
+	for branch, r := range rollbackCommits {
+
+		branchCommits := commitsHistory[branch]
+
+		index := slices.Index(branchCommits, r.GitOpsCommit)
+
+		// If the commit is not found, skip the branch
+		if index == -1 {
+			continue
+		}
+
+		commitsAfterRollback[branch] = branchCommits[:index]
+
+	}
+
+	return commitsAfterRollback, nil
 }

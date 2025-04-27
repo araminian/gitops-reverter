@@ -1,13 +1,17 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-git/go-billy/v5/memfs"
+	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -494,6 +498,310 @@ func RevertCommit(url string, auth *http.BasicAuth, branch string, commitSHA str
 	})
 	if err != nil {
 		return fmt.Errorf("failed to push revert: %w", err)
+	}
+
+	return nil
+}
+
+// revertFromCommitToHead is equivalent to git revert <commitSHA>..HEAD
+func revertFromCommitToHead(url string, auth *http.BasicAuth, branch string, commitSHA string, force bool, author string, email string) error {
+	// Use in-memory storage and filesystem
+	storage := memory.NewStorage()
+	fs := memfs.New()
+
+	// Clone the repository with the specified branch
+	refName := plumbing.NewBranchReferenceName(branch)
+	repo, err := git.Clone(
+		storage,
+		fs,
+		&git.CloneOptions{
+			URL:           url,
+			ReferenceName: refName,
+			SingleBranch:  true,
+			Auth:          auth,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("failed to clone repository: %w", err)
+	}
+
+	// Get the worktree
+	wt, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to get worktree: %w", err)
+	}
+
+	// Get the HEAD reference
+	headRef, err := repo.Head()
+	if err != nil {
+		return fmt.Errorf("failed to get HEAD reference: %w", err)
+	}
+
+	// Get the HEAD commit
+	headCommit, err := repo.CommitObject(headRef.Hash())
+	if err != nil {
+		return fmt.Errorf("failed to get HEAD commit: %w", err)
+	}
+
+	// Find all commits between startCommit and HEAD
+	commitIter := object.NewCommitIterBSF(headCommit, nil, nil)
+
+	// Collect all commits to revert
+	commitsToRevert := []*object.Commit{}
+	baseCommitFound := false
+
+	// Create an early stop error for when we find the target commit
+	errStopIteration := errors.New("found base commit")
+
+	err = commitIter.ForEach(func(commit *object.Commit) error {
+		if commit.Hash.String() == commitSHA {
+			baseCommitFound = true
+			// Don't add the base commit to the list of commits to revert
+			return errStopIteration
+		}
+
+		commitsToRevert = append(commitsToRevert, commit)
+		return nil
+	})
+
+	if err != nil && err != errStopIteration {
+		return fmt.Errorf("failed to iterate commits: %w", err)
+	}
+
+	if !baseCommitFound {
+		return fmt.Errorf("base commit %s not found in history of branch %s", commitSHA, branch)
+	}
+
+	// No commits to revert if the list is empty
+	if len(commitsToRevert) == 0 {
+		return fmt.Errorf("no commits to revert between %s and HEAD", commitSHA)
+	}
+
+	// Reverse the commits order to revert from newest to oldest
+	// We need to reverse the order since we want to apply the reverts chronologically
+	// Starting from the most recent commit
+	reverseCommits := make([]*object.Commit, len(commitsToRevert))
+	for i, j := 0, len(commitsToRevert)-1; i <= j; i, j = i+1, j-1 {
+		reverseCommits[i], reverseCommits[j] = commitsToRevert[j], commitsToRevert[i]
+	}
+
+	// Revert each commit in reverse order (from newer to older)
+	for _, commitToRevert := range reverseCommits {
+		// Skip merge commits as they require special handling
+		if commitToRevert.NumParents() > 1 {
+			continue
+		}
+
+		if commitToRevert.NumParents() == 0 {
+			return fmt.Errorf("cannot revert commit %s with no parents", commitToRevert.Hash.String())
+		}
+
+		// Get the parent commit
+		parentCommit, err := commitToRevert.Parent(0)
+		if err != nil {
+			return fmt.Errorf("failed to get parent of commit %s: %w", commitToRevert.Hash.String(), err)
+		}
+
+		// Get the trees for comparison
+		commitTree, err := commitToRevert.Tree()
+		if err != nil {
+			return fmt.Errorf("failed to get tree for commit %s: %w", commitToRevert.Hash.String(), err)
+		}
+
+		parentTree, err := parentCommit.Tree()
+		if err != nil {
+			return fmt.Errorf("failed to get tree for parent commit: %w", err)
+		}
+
+		// Get changes between the commit to revert and its parent
+		changes, err := commitTree.Diff(parentTree)
+		if err != nil {
+			return fmt.Errorf("failed to get changes for commit %s: %w", commitToRevert.Hash.String(), err)
+		}
+
+		// Create a revert message
+		revertMessage := fmt.Sprintf("Revert \"%s\"\n\nThis reverts commit %s",
+			strings.Split(commitToRevert.Message, "\n")[0], commitToRevert.Hash.String())
+
+		// Apply the inverse of the changes (revert the commit)
+		for _, change := range changes {
+			// Check the From and To fields to determine the type of change
+			fromEmpty := change.From.Name == ""
+			toEmpty := change.To.Name == ""
+
+			if fromEmpty && !toEmpty {
+				// This was a file addition in the original commit, we need to remove it
+				_, err = wt.Remove(change.To.Name)
+				if err != nil {
+					return fmt.Errorf("failed to remove file %s: %w", change.To.Name, err)
+				}
+			} else if !fromEmpty && toEmpty {
+				// This was a file deletion in the original commit, we need to restore it
+				fromFile, err := parentTree.File(change.From.Name)
+				if err != nil {
+					return fmt.Errorf("failed to get file %s from parent tree: %w", change.From.Name, err)
+				}
+
+				content, err := fromFile.Contents()
+				if err != nil {
+					return fmt.Errorf("failed to get contents of file %s: %w", change.From.Name, err)
+				}
+
+				// Create directories if they don't exist
+				dir := change.From.Name
+				lastSlash := strings.LastIndex(dir, "/")
+				if lastSlash > 0 {
+					dir = dir[:lastSlash]
+					err = wt.Filesystem.MkdirAll(dir, 0755)
+					if err != nil {
+						return fmt.Errorf("failed to create directories for %s: %w", change.From.Name, err)
+					}
+				}
+
+				// Create the file in the worktree
+				f, err := wt.Filesystem.Create(change.From.Name)
+				if err != nil {
+					return fmt.Errorf("failed to create file %s: %w", change.From.Name, err)
+				}
+
+				_, err = f.Write([]byte(content))
+				if err != nil {
+					f.Close()
+					return fmt.Errorf("failed to write to file %s: %w", change.From.Name, err)
+				}
+
+				err = f.Close()
+				if err != nil {
+					return fmt.Errorf("failed to close file %s: %w", change.From.Name, err)
+				}
+
+				_, err = wt.Add(change.From.Name)
+				if err != nil {
+					return fmt.Errorf("failed to add file %s to index: %w", change.From.Name, err)
+				}
+			} else {
+				// This was a file modification in the original commit, we need to restore the parent version
+				fromFile, err := parentTree.File(change.From.Name)
+				if err != nil {
+					return fmt.Errorf("failed to get file %s from parent tree: %w", change.From.Name, err)
+				}
+
+				content, err := fromFile.Contents()
+				if err != nil {
+					return fmt.Errorf("failed to get contents of file %s: %w", change.From.Name, err)
+				}
+
+				// Update the file in the worktree
+				f, err := wt.Filesystem.Create(change.From.Name)
+				if err != nil {
+					return fmt.Errorf("failed to create file %s: %w", change.From.Name, err)
+				}
+
+				_, err = f.Write([]byte(content))
+				if err != nil {
+					f.Close()
+					return fmt.Errorf("failed to write to file %s: %w", change.From.Name, err)
+				}
+
+				err = f.Close()
+				if err != nil {
+					return fmt.Errorf("failed to close file %s: %w", change.From.Name, err)
+				}
+
+				_, err = wt.Add(change.From.Name)
+				if err != nil {
+					return fmt.Errorf("failed to add file %s to index: %w", change.From.Name, err)
+				}
+			}
+		}
+
+		// Commit the revert
+		_, err = wt.Commit(revertMessage, &git.CommitOptions{
+			Author: &object.Signature{
+				Name:  author,
+				Email: email,
+				When:  time.Now(),
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to commit revert of %s: %w", commitToRevert.Hash.String(), err)
+		}
+	}
+
+	// Push the changes
+	err = repo.Push(&git.PushOptions{
+		Auth:  auth,
+		Force: force,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to push revert commits: %w", err)
+	}
+
+	return nil
+}
+
+// revertFromCommitCLI reverts multiple commits in a single command
+func revertFromCommitCLI(url string, auth *http.BasicAuth, branch string, commits []string, force bool, author string, email string) error {
+	// Create a temporary directory to clone the repository
+	tempDir, err := os.MkdirTemp("", "git-revert-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary directory: %w", err)
+	}
+	defer os.RemoveAll(tempDir) // Clean up when we're done
+
+	// Clone the repository using go-git library
+	refName := plumbing.NewBranchReferenceName(branch)
+	fs := osfs.New(tempDir)
+	repo, err := git.Clone(memory.NewStorage(), fs, &git.CloneOptions{
+		URL:           url,
+		ReferenceName: refName,
+		SingleBranch:  true,
+		Auth:          auth,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to clone repository: %w", err)
+	}
+
+	// Add author information for git commands
+	authorString := fmt.Sprintf("%s <%s>", author, email)
+
+	// Execute git revert command using CLI for all commits at once
+	revertArgs := []string{"revert", "--no-edit", "--author", authorString}
+
+	if force {
+		revertArgs = append(revertArgs, "--no-gpg-sign")
+	}
+
+	// Add all commits to revert in a single command (from newest to oldest)
+	revertArgs = append(revertArgs, commits...)
+
+	revertCmd := exec.Command("git", revertArgs...)
+	revertCmd.Dir = tempDir
+	revertOutput, err := revertCmd.CombinedOutput()
+
+	if err != nil {
+		return fmt.Errorf("failed to revert commits: %s, %w", revertOutput, err)
+	}
+
+	// Get the worktree
+	wt, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to get worktree: %w", err)
+	}
+
+	// Make sure all new files are added
+	_, err = wt.Add(".")
+	if err != nil {
+		return fmt.Errorf("failed to add files to index: %w", err)
+	}
+
+	// Push the changes back using go-git
+	err = repo.Push(&git.PushOptions{
+		Auth:  auth,
+		Force: force,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to push changes: %w", err)
 	}
 
 	return nil
