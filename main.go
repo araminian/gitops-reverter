@@ -105,20 +105,28 @@ func main() {
 		log.Fatalf("Failed to find commits after the gitops commit related to the desired commit: %v", err)
 	}
 
+	numberOfBranchesToProcess := 0
+	for _, commits := range commitsAfterRollback {
+		if len(commits) > 0 {
+			numberOfBranchesToProcess++
+		}
+	}
+
+	log.Printf("Number of branches to process: %d", numberOfBranchesToProcess)
+
 	//  Newest to oldest
 	log.Printf("------------------- START ROLLBACK -------------------")
 	for branch, commits := range commitsAfterRollback {
 		log.Printf("------------ START BRANCH %s-------------\n", branch)
+		if len(commits) == 0 {
+			log.Printf("No commits to revert on branch %s", branch)
+			continue
+		}
 		log.Printf("Branch: %s\n", branch)
 		log.Printf("Number of commits to revert: %d\n", len(commits))
 
 		for i, commit := range commits {
 			log.Printf("Commit %d: %s\n", i, commit)
-		}
-
-		if len(commits) == 0 {
-			log.Printf("No commits to revert on branch %s", branch)
-			continue
 		}
 
 		log.Printf("Reverting %d commits on branch %s", len(commits), branch)
