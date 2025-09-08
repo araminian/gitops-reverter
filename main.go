@@ -20,8 +20,8 @@ func main() {
 	pathFlag := flag.String("path", "manifests/api/prod", "The Path within the gitops branches to analyze")
 	ignoreBranchesFlag := flag.String("ignoreBranches", "gitops/sink,gitops/infra,gitops/stage,gitops/seo-indexation,gitops/member-data", "The Comma-separated list of gitops branches to ignore")
 	sinceFlag := flag.Int("since", 1, "The Number of months ago to get the commits")
-	modeFlag := flag.Bool("rollback", true, "The Mode to run the program, if true, it will run in rollback mode. Otherwise, it will just print the commits to revert")
-	pushFlag := flag.Bool("push", true, "if true, it will push the changes to the remote repository. Otherwise, it will just commit the changes")
+	rollbackFlag := flag.Bool("rollback", false, "The Mode to run the program, if true, it will run in rollback mode. Otherwise, it will just print the commits to revert")
+	pushFlag := flag.Bool("push", false, "if true, it will push the changes to the remote repository. Otherwise, it will just commit the changes")
 
 	flag.Usage = func() {
 		fmt.Printf("\nUsage: %s <desiredCommitHash> <owner> <repo> <path> <Comma-separated list of gitops branches to ignore> <since> <rollback> <push>\n", os.Args[0])
@@ -45,7 +45,7 @@ func main() {
 	path := *pathFlag
 	basicAuth := &http.BasicAuth{Username: "git", Password: os.Getenv("GITHUB_TOKEN")}
 	ignoreBranches := strings.Split(*ignoreBranchesFlag, ",")
-	rollbackMode := *modeFlag
+	rollbackMode := *rollbackFlag
 	pushMode := *pushFlag
 
 	client, err := NewGithubClient(owner, repo)
@@ -122,7 +122,7 @@ func main() {
 		}
 
 		log.Printf("Reverting %d commits on branch %s", len(commits), branch)
-		if rollbackMode {
+		if !rollbackMode {
 			log.Printf("Skipping revert of commits on branch %s, rollbackMode is false", branch)
 			continue
 		}

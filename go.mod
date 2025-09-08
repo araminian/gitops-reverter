@@ -1,4 +1,4 @@
-module github.com/araminian/gitops-reverter
+module github.com/araminian/hsw-rollback
 
 go 1.23.4
 
