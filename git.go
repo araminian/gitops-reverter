@@ -34,7 +34,7 @@ func cloneRepoBranch(url string, branch string, depth int, auth *http.BasicAuth)
 }
 
 // revertFromCommitCLI reverts multiple commits in a single command
-func revertFromCommitCLI(owner, repoName string, auth *http.BasicAuth, branch string, commits []string, force bool) error {
+func revertFromCommitCLI(owner, repoName string, auth *http.BasicAuth, branch string, commits []string, force bool, pushMode bool) error {
 	// Check if commits slice is empty
 	if len(commits) == 0 {
 		return fmt.Errorf("no commits provided to revert")
@@ -49,6 +49,7 @@ func revertFromCommitCLI(owner, repoName string, auth *http.BasicAuth, branch st
 	}
 	defer os.RemoveAll(tempDir) // Clean up when we're done
 
+	log.Printf("Cloning repository %s", url)
 	// Clone the repository using go-git library
 	refName := plumbing.NewBranchReferenceName(branch)
 	repo, err := git.PlainClone(tempDir, false, &git.CloneOptions{
@@ -60,6 +61,7 @@ func revertFromCommitCLI(owner, repoName string, auth *http.BasicAuth, branch st
 	if err != nil {
 		return fmt.Errorf("failed to clone repository: %w", err)
 	}
+	log.Printf("Repository cloned successfully in %s", tempDir)
 
 	// Add author information for git commands
 	// Execute git revert command using CLI for all commits at once
@@ -72,7 +74,6 @@ func revertFromCommitCLI(owner, repoName string, auth *http.BasicAuth, branch st
 	// Add all commits to revert in a single command (from newest to oldest)
 	revertArgs = append(revertArgs, commits...)
 
-	log.Printf("Revert Args: %v", revertArgs)
 	revertCmd := exec.Command("git", revertArgs...)
 	log.Printf("Revert Command: %v", revertCmd.String())
 	revertCmd.Dir = tempDir
@@ -95,6 +96,10 @@ func revertFromCommitCLI(owner, repoName string, auth *http.BasicAuth, branch st
 	}
 
 	// Push the changes back using go-git
+	if !pushMode {
+		log.Printf("Skipping push of changes to remote repository, pushMode is false")
+		return nil
+	}
 	err = repo.Push(&git.PushOptions{
 		Auth:  auth,
 		Force: force,
