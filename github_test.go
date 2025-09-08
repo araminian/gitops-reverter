@@ -141,7 +141,7 @@ func TestGenerateCommitGraph(t *testing.T) {
 	// }
 
 	t.Logf("Finding rollback commits")
-	candidateCommit := "aee08b8b8a6c8212a043486c78af8fe7528464af"
+	candidateCommit := "ae0b50669b483e0c91227ea639c025382ba3c24c"
 
 	rollbackCommits, err := findRollbackCommits(commitGraph, branches, candidateCommit)
 

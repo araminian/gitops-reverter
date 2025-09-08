@@ -11,6 +11,24 @@ import (
 	"github.com/google/go-github/v71/github"
 )
 
+// processHeadCommits processes all commits and returns a map of commits with their parent and date
+/*
+Output:
+
+{
+	"sha1": {
+		"parent": "sha2",
+		"date": "2021-01-01",
+		"gitops_commits": {
+			"gitops/branch1": {
+				"sha": "sha3",
+				"date": "2021-01-01"
+			}
+		}
+	}
+}
+*/
+
 func processHeadCommits(commits []*github.RepositoryCommit) map[string]*HeadCommit {
 
 	headCommits := make(map[string]*HeadCommit)
@@ -51,6 +69,27 @@ func listGitOpsBranches(owner, repo string, ignore []string) ([]string, error) {
 	return branches, nil
 }
 
+// generateCommitGraph generates a commit graph for a given repository and path
+/*
+Output:
+
+{
+	"sha1": {
+		"parent": "sha2",
+		"date": "2021-01-01",
+		"gitops_commits": {
+			"gitops/branch1": {
+				"sha": "sha3",
+				"date": "2021-01-01"
+			},
+			"gitops/branch2": {
+				"sha": "sha4",
+				"date": "2021-01-01"
+			}
+		}
+	}
+}
+*/
 func generateCommitGraph(owner, repo string, gitopsBranches []string, headCommits map[string]*HeadCommit, path string) (commitsGraph map[string]*HeadCommit, commitsHistory map[string][]string, err error) {
 
 	client, err := NewGithubClient(owner, repo)
@@ -111,6 +150,7 @@ func generateCommitGraph(owner, repo string, gitopsBranches []string, headCommit
 }
 
 // findRollbackCommits finds rollback commits for a given head commit on gitops branches
+// It tries to find what is the last commit on gitops branches that is before the candidate commit
 func findRollbackCommits(commitsGraph map[string]*HeadCommit, gitopsBranches []string, candidateCommit string) (map[string]RollbackCommit, error) {
 
 	rollbackCommits := make(map[string]RollbackCommit, len(gitopsBranches))
@@ -130,9 +170,6 @@ func findRollbackCommits(commitsGraph map[string]*HeadCommit, gitopsBranches []s
 		if len(branchesToCheck) == 0 {
 			break
 		}
-
-		// fmt.Printf("Checking commit: %s\n", commitToCheck)
-		// fmt.Printf("Branches to check: %v\n", branchesToCheck)
 
 		gitopsCommits := commitsGraph[commitToCheck].GitOpsCommits
 		for b, c := range gitopsCommits {
@@ -168,6 +205,7 @@ func findCommitsAfterRollback(rollbackCommits map[string]RollbackCommit, commits
 
 		// If the commit is not found, skip the branch
 		if index == -1 {
+			fmt.Printf("Rollback commit not found in branch %s history, skipping\n", branch)
 			continue
 		}
 

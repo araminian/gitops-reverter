@@ -5,91 +5,91 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
 )
 
 func main() {
-	auth := &http.BasicAuth{Username: "git", Password: os.Getenv("GITHUB_TOKEN")}
-	commitHash := "c17f5d14da563de7887f79ad8be21e076de45848"
-	since := time.Now().AddDate(0, 0, -2)
-	workers := 10
+	commitHash := "f50d95b53a5d9fdb2a1039b6a86aa180ee1afb3d"
+	since := time.Now().AddDate(0, -1, 0)
 	owner := "trivago"
-	repo := "hotel-search-web"
-	url := fmt.Sprintf("https://github.com/%s/%s", owner, repo)
-	branch := "master"
+	repo := "hsw-fork"
+	path := "manifests/api/prod"
+	basicAuth := &http.BasicAuth{Username: "git", Password: os.Getenv("GITHUB_TOKEN")}
 
-	// // Use Git to find the commit history after the specific commit
-	// commitsAfterCommit, err := findCommitHistoryAfterSpecificCommit("https://github.com/trivago/hotel-search-web", "master", commitHash, auth, since)
-	// if err != nil {
-	// 	log.Fatalf("Failed to find commit history after specific commit: %v", err)
-	// }
-
-	// for _, c := range commitsAfterCommit {
-	// 	log.Printf("Commit: %s", c)
-	// }
-
-	// Use Github to find the commit history after the specific commit
-
-	githubClient, err := NewGithubClient(owner, repo)
+	client, err := NewGithubClient(owner, repo)
 	if err != nil {
-		log.Fatalf("Failed to create Github client: %v", err)
+		log.Fatalf("Failed to create github client: %v", err)
+	}
+	ignoreBranches := []string{"gitops/sink", "gitops/infra", "gitops/stage", "gitops/seo-indexation", "gitops/member-data"}
+
+	// List all gitops branches
+	branches, err := listGitOpsBranches(owner, repo, ignoreBranches)
+	if err != nil {
+		log.Fatalf("Failed to list gitops branches: %v", err)
 	}
 
-	commitsGithub, err := githubClient.ListCommitsAfterCommit(context.Background(), branch, commitHash, since)
+	// Get all commits since 1 month ago on master
+	commits, err := client.ListCommitsSince(context.Background(), since, "master")
 	if err != nil {
 		log.Fatalf("Failed to list commits: %v", err)
 	}
 
-	commitsAfterDesiredCommit := make([]string, 0)
+	masterCommits := processHeadCommits(commits)
 
-	for _, c := range commitsGithub {
-		commitsAfterDesiredCommit = append(commitsAfterDesiredCommit, c.GetSHA())
-	}
-
-	log.Printf("Found %v commits to check", commitsAfterDesiredCommit)
-
-	filter := func(branch string) bool {
-		return strings.HasPrefix(branch, "gitops/")
-	}
-
-	branches, err := listBranches(url, auth, filter)
+	commitGraph, commitsHistory, err := generateCommitGraph(owner, repo, branches, masterCommits, path)
 	if err != nil {
-		log.Fatalf("Failed to list branches: %v", err)
+		log.Fatalf("Failed to generate commit graph: %v", err)
 	}
 
-	// for _, branch := range branches {
-	// 	log.Printf("Branch: %s", branch)
-	// }
+	for _, commit := range commitGraph {
+		fmt.Printf("Commit: %s\n", commit.SHA)
+		fmt.Printf("Parent: %s\n", commit.Parent)
+		fmt.Printf("Date: %v\n", commit.Date)
+		fmt.Printf("GitOps Commits: %v\n", commit.GitOpsCommits)
+		fmt.Printf("--------------------------------\n")
+	}
 
-	commits, err := findCommitOnBranches(url, auth, branches, "prod", "api", commitHash, commitsAfterDesiredCommit, since, workers)
+	rollbackCommits, err := findRollbackCommits(commitGraph, branches, commitHash)
 	if err != nil {
-		log.Fatalf("Failed to find commits: %v", err)
+		log.Fatalf("Failed to find rollback commits: %v", err)
 	}
 
-	// for branch, commit := range commits {
-	// 	log.Printf("Branch: %s", branch)
-	// 	for _, c := range commit {
-	// 		log.Printf("Commit: %s", c.Message)
-	// 		log.Printf("Commit SHA: %s", c.SHA)
-	// 		log.Printf("Commit Created: %s", c.Created)
-	// 		log.Printf("Commit IsDesiredCommit: %t", c.IsDesiredCommit)
-	// 	}
-	// 	log.Printf("--------------------------------")
-	// }
+	for branch, commit := range rollbackCommits {
+		fmt.Printf("Branch: %s\n", branch)
+		fmt.Printf("Rollback Commit: %s\n", commit.GitOpsCommit)
+		fmt.Printf("Head Commit: %s\n", commit.HeadCommit)
+		fmt.Printf("--------------------------------\n")
+	}
 
-	revertCommits, err := findRevertSHAs(commits)
+	log.Printf("Finding commits after rollback")
+	commitsAfterRollback, err := findCommitsAfterRollback(rollbackCommits, commitsHistory)
 	if err != nil {
-		log.Fatalf("Failed to find revert commits: %v", err)
+		log.Fatalf("Failed to find commits after rollback: %v", err)
 	}
 
-	for branch, revertCommit := range revertCommits {
-		log.Printf("Branch: %s", branch)
-		log.Printf("Revert SHA: %s", revertCommit.SHA)
-		log.Printf("Message: %s", revertCommit.Message)
-		log.Printf("--------------------------------")
+	//  Newest to oldest
+	for branch, commits := range commitsAfterRollback {
+		fmt.Printf("Branch: %s\n", branch)
+		fmt.Printf("Number of commits to revert: %d\n", len(commits))
+
+		for i, commit := range commits {
+			fmt.Printf("Commit %d: %s\n", i, commit)
+		}
+
+		if len(commits) == 0 {
+			log.Printf("No commits to revert on branch %s", branch)
+			continue
+		}
+
+		log.Printf("Reverting %d commits on branch %s", len(commits), branch)
+		err = revertFromCommitCLI(owner, repo, basicAuth, branch, commits, true)
+		if err != nil {
+			log.Fatalf("Failed to revert commit: %v", err)
+		}
+
+		fmt.Printf("--------------------------------\n")
 	}
 
 }
