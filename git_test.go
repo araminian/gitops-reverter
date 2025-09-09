@@ -1,61 +1,54 @@
 package main
 
 import (
-	"fmt"
 	"os"
-	"regexp"
-	"strings"
 	"testing"
 	"time"
-
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/go-git/go-git/v5/plumbing/transport/http"
 )
 
-func TestGitOpsHistory(t *testing.T) {
+func TestCloneRepositoryCLI(t *testing.T) {
 
 	owner := "trivago"
-	repo := "hotel-search-web"
+	repoName := "hotel-search-web"
+	t.Logf("Cloning repository %s/%s", owner, repoName)
+	start := time.Now()
+	repoDir, err := cloneRepositoryCLI(owner, repoName)
+	defer os.RemoveAll(repoDir)
+	if err != nil {
+		t.Fatalf("Failed to clone repository: %v", err)
+	}
+	t.Logf("Repository cloned in %v in directory %s", time.Since(start), repoDir)
+}
+
+func TestCreateWorktree(t *testing.T) {
+
+	owner := "trivago"
+	repoName := "hotel-search-web"
+
 	branch := "gitops/advertisers"
-	fileName := "manifests/api/prod"
-	pathFilter := func(path string) bool {
-		return strings.HasPrefix(path, fileName)
-	}
-	since := time.Now().AddDate(0, -1, 0)
-
-	auth := &http.BasicAuth{Username: "git", Password: os.Getenv("GITHUB_TOKEN")}
-
-	url := fmt.Sprintf("https://github.com/%s/%s", owner, repo)
-
-	r, err := cloneRepoBranch(url, branch, 0, auth)
+	branchDir, err := os.MkdirTemp("", "git-revert-*")
 	if err != nil {
-		t.Fatalf("Failed to clone repo: %v", err)
+		t.Fatalf("Failed to create temporary directory: %v", err)
 	}
 
-	commits, err := r.Log(&git.LogOptions{
-		All:        true,
-		Since:      &since,
-		PathFilter: pathFilter,
-	})
+	t.Logf("Creating temporary directory %s", branchDir)
+	if os.Getenv("GITHUB_TOKEN") == "" {
+		t.Fatalf("GITHUB_TOKEN environment variable is not set")
+	}
+
+	start := time.Now()
+	repoDir, err := cloneRepositoryCLI(owner, repoName)
 	if err != nil {
-		t.Fatalf("Failed to get commits: %v", err)
+		t.Fatalf("Failed to clone repository: %v", err)
 	}
 
-	commits.ForEach(func(c *object.Commit) error {
-		message := c.Message
+	t.Logf("Repository cloned in %v in directory %s", time.Since(start), repoDir)
 
-		// Extract SHA from message if it follows the pattern: repo@SHA
-		repoSHAPattern := regexp.MustCompile(`[\w-]+/[\w-]+@([0-9a-f]{40})`)
-		matches := repoSHAPattern.FindStringSubmatch(message)
-		var extractedSHA string
-		if len(matches) > 1 {
-			extractedSHA = matches[1]
-		}
+	t.Logf("Creating worktree for branch %s", branch)
 
-		fmt.Printf("SHA: %s, RemoteSHA: %s, Author: %s, Email: %s, Date: %s\n", c.Hash, extractedSHA, c.Author.Name, c.Author.Email, c.Author.When)
-		fmt.Printf("Parents: %v\n", c.ParentHashes)
-		return nil
-	})
-
+	err = createWorktree(repoDir, branch, branchDir)
+	if err != nil {
+		t.Fatalf("Failed to create worktree: %v", err)
+	}
+	t.Logf("Worktree created in %v", time.Since(start))
 }

@@ -7,12 +7,13 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"time"
-
-	"github.com/go-git/go-git/v5/plumbing/transport/http"
 )
 
 func main() {
+
+	start := time.Now()
 
 	desiredCommitHashFlag := flag.String("desiredCommitHash", "", "The Desired Commit Hash to revert gitops branches to its state")
 	ownerFlag := flag.String("owner", "trivago", "The Owner of the GitHub repository")
@@ -43,7 +44,6 @@ func main() {
 	owner := *ownerFlag
 	repo := *repoFlag
 	path := *pathFlag
-	basicAuth := &http.BasicAuth{Username: "git", Password: os.Getenv("GITHUB_TOKEN")}
 	ignoreBranches := strings.Split(*ignoreBranchesFlag, ",")
 	rollbackMode := *rollbackFlag
 	pushMode := *pushFlag
@@ -116,31 +116,57 @@ func main() {
 
 	//  Newest to oldest
 	log.Printf("------------------- START ROLLBACK -------------------")
-	for branch, commits := range commitsAfterRollback {
-		log.Printf("------------ START BRANCH %s-------------\n", branch)
-		if len(commits) == 0 {
-			log.Printf("No commits to revert on branch %s", branch)
-			continue
-		}
-		log.Printf("Branch: %s\n", branch)
-		log.Printf("Number of commits to revert: %d\n", len(commits))
 
-		for i, commit := range commits {
-			log.Printf("Commit %d: %s\n", i, commit)
-		}
-
-		log.Printf("Reverting %d commits on branch %s", len(commits), branch)
-		if !rollbackMode {
-			log.Printf("Skipping revert of commits on branch %s, rollbackMode is false", branch)
-			continue
-		}
-		err = revertFromCommitCLI(owner, repo, basicAuth, branch, commits, true, pushMode)
-		if err != nil {
-			log.Fatalf("Failed to revert commits on branch %s: %v", branch, err)
-		}
-
-		log.Printf("------------ END BRANCH %s-------------\n", branch)
+	log.Printf("------------------- START CLONING REPOSITORIES -------------------")
+	repoDir, err := cloneRepositoryCLI(owner, repo)
+	defer os.RemoveAll(repoDir)
+	if err != nil {
+		log.Fatalf("Failed to clone repository: %v", err)
 	}
-	log.Printf("------------------- END ROLLBACK -------------------")
+	log.Printf("Repository cloned in %v in directory %s", time.Since(start), repoDir)
+	log.Printf("------------------- END CLONING REPOSITORIES -------------------")
 
+	var wg sync.WaitGroup
+	concurrencyLimit := 20
+	if numberOfBranchesToProcess < concurrencyLimit {
+		concurrencyLimit = numberOfBranchesToProcess
+	}
+
+	sem := make(chan struct{}, concurrencyLimit)
+	for branch, commits := range commitsAfterRollback {
+		// Create a worker per branch that has commits to process
+		if len(commits) == 0 {
+			log.Printf("------------ START BRANCH %s-------------\n", branch)
+			log.Printf("No commits to revert on branch %s", branch)
+			log.Printf("------------ END BRANCH %s-------------\n", branch)
+			continue
+		}
+
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(branch string, commits []string) {
+			defer func() { <-sem; wg.Done() }()
+			log.Printf("------------ START BRANCH %s-------------\n", branch)
+			log.Printf("Branch: %s\n", branch)
+			log.Printf("Number of commits to revert: %d\n", len(commits))
+
+			for i, commit := range commits {
+				log.Printf("Commit %d: %s\n", i+1, commit)
+			}
+
+			log.Printf("Reverting %d commits on branch %s", len(commits), branch)
+			if !rollbackMode {
+				log.Printf("Skipping revert of commits on branch %s, rollbackMode is false", branch)
+				log.Printf("------------ END BRANCH %s-------------\n", branch)
+				return
+			}
+			if err := revertFromCommitCLI(repoDir, branch, commits, true, pushMode); err != nil {
+				log.Printf("Failed to revert commits on branch %s: %v", branch, err)
+			}
+			log.Printf("------------ END BRANCH %s-------------\n", branch)
+		}(branch, commits)
+	}
+	wg.Wait()
+	log.Printf("------------------- END ROLLBACK -------------------")
+	log.Printf("Rollback completed in %v", time.Since(start))
 }
