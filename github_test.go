@@ -31,32 +31,6 @@ func TestListCommitsSince(t *testing.T) {
 	}
 }
 
-func TestListAllWorkflowsRuns(t *testing.T) {
-
-	owner := "trivago"
-	repo := "hotel-search-web"
-
-	client, err := NewGithubClient(owner, repo)
-	if err != nil {
-		t.Fatalf("Failed to create github client: %v", err)
-	}
-
-	workflowsRuns, err := client.ListAllWorkflowsRuns(context.Background(), "master")
-	if err != nil {
-		t.Fatalf("Failed to list workflows runs: %v", err)
-	}
-
-	for _, workflowRun := range workflowsRuns {
-		fmt.Println(workflowRun.GetID())
-		fmt.Println(workflowRun.GetName())
-		fmt.Println(workflowRun.GetStatus())
-		fmt.Println(workflowRun.GetURL())
-		fmt.Println(workflowRun.GetCancelURL())
-		fmt.Println(workflowRun.GetWorkflowURL())
-		fmt.Println(workflowRun.GetWorkflowID())
-	}
-}
-
 func TestMasterHistory(t *testing.T) {
 	owner := "trivago"
 	repo := "hotel-search-web"
