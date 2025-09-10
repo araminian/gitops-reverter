@@ -1,4 +1,4 @@
-module github.com/araminian/hsw-rollback
+module github.com/trivago/hsw-rollback
 
 go 1.23.4
 

@@ -1,4 +1,4 @@
-# GitOps Reverter 🔄
+# GitOps Rollback (hotel-search-web-rollback) 🔄
 
 A Go tool that helps you roll back GitOps deployments to a specific commit state across multiple branches. Think of it like a time machine for your deployments!
 
@@ -76,20 +76,24 @@ graph TD
 ### Installation
 ```bash
 # Clone this repository
-git clone https://github.com/araminian/hsw-rollback.git
-cd gitops-reverter
+git clone https://github.com/trivago/hsw-rollback.git
+cd hsw-rollback
 
 # Build the tool
-go build -o gitops-reverter
+go build -o hsw-rollback
 ```
 
 ### Basic Usage
 
 #### 1. Dry Run (Safe - Just See What Would Happen)
+
+**NOTE** If you want to test this tool, it's better to start with a fork of the repository and after you have enough confidence, you can use the original repository.
+
 ```bash
 export GITHUB_TOKEN="your-github-token"
+# export GITHUB_TOKEN=$(gh auth token)
 
-./gitops-reverter \
+./hsw-rollback \
   -desiredCommitHash="f50d95b53a5d9fdb2a1039b6a86aa180ee1afb3d" \
   -owner="your-org" \
   -repo="your-repo" \
@@ -102,7 +106,7 @@ export GITHUB_TOKEN="your-github-token"
 
 #### 2. Actually Rollback (Commits Changes Locally)
 ```bash
-./gitops-reverter \
+./hsw-rollback \
   -desiredCommitHash="f50d95b53a5d9fdb2a1039b6a86aa180ee1afb3d" \
   -owner="your-org" \
   -repo="your-repo" \
@@ -115,7 +119,7 @@ export GITHUB_TOKEN="your-github-token"
 
 #### 3. Full Rollback (Commits AND Pushes Changes)
 ```bash
-./gitops-reverter \
+./hsw-rollback \
   -desiredCommitHash="f50d95b53a5d9fdb2a1039b6a86aa180ee1afb3d" \
   -owner="your-org" \
   -repo="your-repo" \
